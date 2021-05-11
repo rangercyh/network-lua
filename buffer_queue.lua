@@ -1,5 +1,3 @@
-local M = {}
-
 local mt = {}
 
 local function _new_block(v)
@@ -59,7 +57,7 @@ end
 local function init_buffer(self)
     local DEF_FREE_BLOCK = 3
 
-    for i=1,DEF_FREE_BLOCK do
+    for _=1,DEF_FREE_BLOCK do
         insert_free_list(self, _new_block())
     end
 end

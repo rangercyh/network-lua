@@ -20,7 +20,8 @@ end
 
 function mt:connect(host, port, stable)
     self.v_request_session = {}
-    local obj, err = stable and sconn.connect_host(host, port) or conn.connect_host(host, port)
+    local conn_module = stable and sconn or conn
+    local obj, err = conn_module.connect_host(host, port)
     if not obj then
         return false, err
     else
@@ -82,9 +83,9 @@ function mt:get_timestamp()
 end
 
 function mt:reconnect(cb)
-    local conn = self.v_conn
-    if conn.reconnect then
-        local ok, err = conn:reconnect(function(success)
+    local conn_module = self.v_conn
+    if conn_module.reconnect then
+        local ok, err = conn_module:reconnect(function(success)
             print("end reconnect", success)
             if success then -- 重连成功
             end
