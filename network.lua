@@ -85,6 +85,7 @@ function mt:reconnect(cb)
     local conn = self.v_conn
     if conn.reconnect then
         local ok, err = conn:reconnect(function(success)
+            print("end reconnect", success)
             if success then -- 重连成功
             end
             cb(success)
