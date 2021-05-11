@@ -153,8 +153,8 @@ function mt:pop(nbytes)
 
         self.v_block_head = head
         self.v_size = self.v_size - count
-        if not head then 
-            self.v_block_tail=false 
+        if not head then
+            self.v_block_tail=false
         end
         local ret = table.concat(buff, "", 1, index)
         assert(#ret == nbytes)

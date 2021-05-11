@@ -1,4 +1,4 @@
-local buffer_queue = require "logic/net/buffer_queue"
+local buffer_queue = require "buffer_queue"
 local socket = require "socket"
 
 local DEF_MSG_HEADER_LEN = 2
@@ -58,7 +58,7 @@ local function _flush_send(self)
         local len = #v
         local n, err, last_sent = fd:send(v)
         if not n then
-            if last_pos and last_sent > 0 then
+            if last_sent and last_sent > 0 then
                 send_buf:pop(last_sent)
             end
             return false, err
@@ -77,28 +77,22 @@ end
 local function _flush_recv(self)
     local recv_buf = self.v_recv_buf
     local fd = self.v_fd
-    local count = 0
-
-    while true do
-    ::CONTINUE::
-        local data, err, piece_data = fd:receive("*a")
-        if not data then
-            if piece_data and #piece_data > 0 then
-                recv_buf:push(piece_data)
-            end
-            if err == "timeout" then
-                return true
-            end
-            return false, err
-        else
-            local len = #data
-            count = count + len
-            recv_buf:push(data)
-            break
+    local data, err, piece_data = fd:receive("*a")
+    if not data then
+        if piece_data and #piece_data > 0 then
+            recv_buf:push(piece_data)
         end
+        if err == "timeout" then
+            return true
+        end
+        return false, err
+    else
+        local count = 0
+        local len = #data
+        count = count + len
+        recv_buf:push(data)
+        return count
     end
-
-    return count
 end
 
 local function _check_connect(self)
@@ -122,6 +116,49 @@ local function _check_connect(self)
         return true
     end
 end
+
+-- ====================== 供sconn 调用 ======================
+function mt:new_connect(addr, port)
+    -- just support tcp now
+    if not(addr.family == "inet" or addr.family == "inet6") then
+        return nil, "just support tcp now"
+    end
+    local c, e = socket.tcp()
+    if not c then return nil, e end
+    local fd, e = c:connect(addr.addr, port)
+    if not fd then
+        c:close()
+        return false, e
+    else
+        c:settimeout(0) -- non blocking
+        self.v_fd:close()
+        self.v_send_buf:clear()
+        self.v_recv_buf:clear()
+        self.v_fd = c
+        self.o_host_addr = addr
+        self.o_port = port
+        self.v_check_connect = true
+       return true
+   end
+end
+
+function mt:pop_msg(header_len, endian)
+    local recv_buf = self.v_recv_buf
+    header_len = header_len or DEF_MSG_HEADER_LEN
+    endian = endian or DEF_MSG_ENDIAN
+
+    return recv_buf:pop_block(header_len, endian)
+end
+
+function mt:send(data)
+   self.v_send_buf:push(data)
+end
+
+function mt:recv(out)
+    local recv_buf = self.v_recv_buf
+    return recv_buf:pop_all(out)
+end
+-- ====================== 供sconn 调用 ======================
 
 function mt:send_msg(data, header_len, endian)
     local send_buf = self.v_send_buf
@@ -148,7 +185,7 @@ success: boolean类型 表示当前status是否正常
 
 err: string类型 表示当前status的错误信息，在success 为false才会有效
 
-status: string类型 当前sconn所在的状态，状态只能是:
+status: string类型 当前conn所在的状态，状态只能是:
     "connect": 连接状态
     "forward": 连接成功状态
     "recv": 接受状态数据状态
@@ -188,20 +225,20 @@ function mt:update()
     return true, nil, "forward"
 end
 
-function mt:flush_send()
+local function flush_send(self)
     local count = false
     repeat
         count = _flush_send(self)
     until not count or count == 0
 end
 
-function mt:getsockname()
-    return self.v_fd:getsockname()
-end
+-- function mt:getsockname()
+--     return self.v_fd:getsockname()
+-- end
 
 function mt:close()
     if self.v_fd then
-        self:flush_send()
+        flush_send(self)
         self.v_fd:close()
     end
     self.v_fd = nil
@@ -209,7 +246,5 @@ function mt:close()
 end
 
 return {
-    resolve = resolve,
-    connect = connect,
     connect_host = connect_host,
 }

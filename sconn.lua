@@ -1,24 +1,16 @@
+local buffer_queue = require "buffer_queue"
 local conn = require "conn"
-local crypto = require "crypto"
+local crypt = require "crypt"
 local rc4 = require "rc4.c"
-local buffer_queue = require "logic/net/buffer_queue"
 
 local pack_data = buffer_queue.pack_data
 
-
-local CACHE_MAX_COUNT = 100
 local DEF_MSG_HEADER_LEN = 2
 local DEF_MSG_ENDIAN = "big"
+local CACHE_MAX_COUNT = 100
 
 local mt = {}
 local cache_mt = {}
-
-
--------------- for test ---------------
-local VERBOSE = true
-local log = VERBOSE and print or
-    function(...)
-    end
 
 -------------- cache ------------------
 local function cache_create()
@@ -79,7 +71,7 @@ function cache_mt:clear()
 end
 
 local function dummy(...)
-    log("send dummy")
+    print("send dummy", ...)
 end
 
 local function dispose_error(state_self, _success, _err, _status)
@@ -144,7 +136,7 @@ local state = {
 local function switch_state(self, s, ...)
     local v = state[s]
     assert(v)
-    log(">>>>>>>>>>>>>switch_state:", s, ...)
+    print(">>>>>>>>>>>>>switch_state:", s, ...)
     self.v_state = v
     if v.request then
         v.request(self, ...)
@@ -159,7 +151,7 @@ function state.newconnect.request(self, target_server, flag)
     -- base64(DH_key)\n
     -- targetServer\n
     -- flag
-    
+
     target_server = target_server or ""
     flag = flag or 0
     local clientkey = crypt.randomkey()
@@ -170,7 +162,7 @@ function state.newconnect.request(self, target_server, flag)
     data = pack_data(data, 2, "big")
     self.v_sock:send(data)
     self.v_clientkey = clientkey
-    log("request:", data)
+    print("request:", data)
     self.v_send_buf_top = 0
 end
 
@@ -180,13 +172,18 @@ function state.newconnect.send(self, data)
     self.v_send_buf[self.v_send_buf_top] = data
 end
 
+local function send(self, data)
+    local _send = self.v_state.send
+    _send(self, data)
+    return true
+end
 
 function state.newconnect.dispatch(self)
     local data = self.v_sock:pop_msg(2, "big")
 
     if not data then return end
 
-    log("dispatch:", data)
+    print("dispatch:", data)
     local id, key = data:match("([^\n]*)\n([^\n]*)")
 
     self.v_id = tonumber(id)
@@ -208,7 +205,7 @@ function state.newconnect.dispatch(self)
 
     -- 发送在新连接建立中间缓存的数据包
     for i=1,self.v_send_buf_top do
-        self:send(self.v_send_buf[i])
+        send(self, self.v_send_buf[i])
     end
     self.v_send_buf_top = 0
     self.v_send_buf = {}
@@ -230,7 +227,7 @@ function state.reconnect.request(self)
     --index\n
     --recvnumber\n
     --base64(HMAC_CODE)\n
-    
+
     self.v_reconnect_index = self.v_reconnect_index + 1
 
     local content = string.format("%d\n%d\n%d\n",
@@ -242,7 +239,7 @@ function state.reconnect.request(self)
     local data = string.format("%s%s\n", content, hmac)
     data = pack_data(data, 2, "big")
 
-    log("request:", data)
+    print("request:", data)
 
     self.v_sock:send(data)
 end
@@ -263,8 +260,8 @@ function state.reconnect.dispatch(self)
     local data = self.v_sock:pop_msg(2, "big")
 
     if not data then return end
-    
-    log("dispatch:", data)
+
+    print("dispatch:", data)
     local recv,msg = data:match "([^\n]*)\n([^\n]*)"
     recv = tonumber(recv)
 
@@ -275,7 +272,7 @@ function state.reconnect.dispatch(self)
 
     -- 重连失败
     if msg ~= "200" then
-        log("msg:", msg)
+        print("msg:", msg)
         if cb then cb(false) end
         switch_state(self, "reconnect_error")
         return
@@ -292,17 +289,17 @@ function state.reconnect.dispatch(self)
     local nbytes = 0
     if recv < sendnumber then
         nbytes = sendnumber - recv
-        local data = self.v_cache:get(nbytes)
+        local more_data = self.v_cache:get(nbytes)
         -- 缓存的数据不足
-        if not data then
+        if not more_data then
             if cb then cb(false) end
             switch_state(self, "reconnect_cache_error")
             return
         end
 
         -- 发送补发数据
-        assert(#data == nbytes)
-        self.v_sock:send(data)
+        assert(#more_data == nbytes)
+        self.v_sock:send(more_data)
     end
 
     -- 重连成功
@@ -351,7 +348,7 @@ end
 function state.forward.dispose(state_self, success, err, status)
     if success then
         if status ~= "forward" then
-            errorf("invalid sock_status:%s", status)
+            error(string.format("invalid sock_status:%s", status))
         end
         return true, nil, "forward"
     else
@@ -401,10 +398,6 @@ local function connect(host, port, targetserver, flag)
     return self
 end
 
-function mt:cur_state()
-    return self.v_state.name
-end
-
 function mt:reconnect(cb)
     local state_name = self.v_state.name
     if state_name ~= "forward" and state_name ~= "reconnect" then
@@ -424,11 +417,6 @@ function mt:reconnect(cb)
     return true
 end
 
-function mt:flush_send()
-
-end
-
-
 --[[
 update 接口现在会返回三个参数 success, err, status
 
@@ -445,12 +433,11 @@ status: string类型 当前sconn所在的状态，状态只能是:
     "connect_break": 断开连接状态
     "close": 关闭状态
 ]]
-
 function mt:update()
     local sock = self.v_sock
-    local state = self.v_state
+    local cur_state = self.v_state
     local success, err, status = sock:update()
-    local dispatch = state.dispatch
+    local dispatch = cur_state.dispatch
     if success and dispatch then
         dispatch(self)
     end
@@ -461,18 +448,9 @@ function mt:update()
     end
 
     -- 处理返回状态值
-    success, err, status = state.dispose(state, success, err, status)
+    success, err, status = cur_state.dispose(cur_state, success, err, status)
     return success ,err, status
 end
-
-
-function mt:send(data)
-    local _send = self.v_state.send
-    _send(self, data)
-    return true
-end
-
-
 
 function mt:send_msg(data, header_len, endian)
     local _send = self.v_state.send
@@ -484,14 +462,6 @@ function mt:send_msg(data, header_len, endian)
     return true
 end
 
-
-function mt:recv(out)
-    local recv_buf = self.v_recv_buf
-    return recv_buf:pop_all(out)
-end
-
-
-
 function mt:recv_msg(out_msg, header_len, endian)
     header_len = header_len or DEF_MSG_HEADER_LEN
     endian = endian or DEF_MSG_ENDIAN
@@ -500,9 +470,11 @@ function mt:recv_msg(out_msg, header_len, endian)
     return recv_buf:pop_all_block(out_msg, header_len, endian)
 end
 
-
 function mt:close()
-    self.v_sock:close()
+    if self.v_sock then
+        self.v_sock:close()
+    end
+    self.v_sock = nil
     self.v_recv_buf:clear()
     switch_state(self, "close")
 end

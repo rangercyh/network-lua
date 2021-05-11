@@ -1,0 +1,15 @@
+[submodule "lua-cmsgpack"]
+	path = lua-cmsgpack
+	url = https://github.com/antirez/lua-cmsgpack.git
+[submodule "crypto"]
+	path = crypto
+	url = https://github.com/Lyra-Game/crypto.git
+[submodule "rc4"]
+	path = rc4
+	url = https://github.com/Lyra-Game/rc4.git
+[submodule "luasocket"]
+	path = luasocket
+	url = https://github.com/diegonehab/luasocket.git
+[submodule "goscon"]
+	path = goscon
+	url = https://github.com/ejoy/goscon.git
